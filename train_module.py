@@ -184,6 +184,53 @@ DEBUG = True
 DEBUG_FIRST_N_BATCHES = 3      # 처음 몇 batch 상세 출력
 DEBUG_EVERY_N_BATCHES = 100    # 이후 몇 batch마다 출력
 
+def load_trained_model_if_complete(
+    model_name,
+    num_labels,
+    ckpt_path,
+    epochs,
+    device=None,
+):
+    """
+    checkpoint가 목표 epochs만큼 학습 완료된 상태면
+    모델 가중치만 로드해서 반환한다.
+
+    완료되지 않았으면 None 반환.
+    """
+    import os
+    import torch
+
+    if device is None:
+        # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cpu")
+
+    if not os.path.exists(ckpt_path):
+        print(f"checkpoint 없음: {ckpt_path}")
+        return None
+
+    model = TokenNormClassifier(
+        model_name=model_name,
+        num_labels=num_labels,
+    ).to(device)
+
+    dummy_optimizer = AdamW(model.parameters(), lr=2e-5)
+
+    start_epoch = load_checkpoint(
+        model=model,
+        optimizer=dummy_optimizer,
+        path=ckpt_path,
+        device=device,
+    )
+
+    if start_epoch >= epochs:
+        print(f"✅ checkpoint 학습 완료 상태 감지: start_epoch={start_epoch}, target_epochs={epochs}")
+        print("학습 스킵하고 checkpoint 가중치만 사용합니다.")
+        model.eval()
+        return model
+
+    print(f"checkpoint는 있지만 학습 미완료: start_epoch={start_epoch}, target_epochs={epochs}")
+    return None
+
 def train_model(
     train_loader,
     val_loader=None,
@@ -568,4 +615,100 @@ def evaluate_predictions(
         "lai": lai,
         "accuracy": accuracy,
         "err": err,
+    }
+
+def evaluate_predictions_by_language(
+    data,
+    pred,
+    ignCaps=False,
+    verbose=False,
+    info=True,
+):
+    """
+    개최측 evaluate()를 그대로 사용해서
+    언어별 성능 + 전체 성능을 출력한다.
+
+    data:
+        raw, norm, lang을 포함한 validation dataset
+
+    pred:
+        data와 같은 순서의 예측 결과 리스트
+    """
+    if len(data) != len(pred):
+        raise ValueError(f"data와 pred 길이가 다릅니다: data={len(data)}, pred={len(pred)}")
+
+    langs = sorted(set(item["lang"] for item in data))
+
+    total_raw = []
+    total_gold = []
+    total_pred = []
+
+    results_by_lang = {}
+
+    for lang in langs:
+        lang_raw = []
+        lang_gold = []
+        lang_pred = []
+
+        for item, pred_sent in zip(data, pred):
+            if item["lang"] != lang:
+                continue
+
+            lang_raw.append(item["raw"])
+            lang_gold.append(item["norm"])
+            lang_pred.append(pred_sent)
+
+        if len(lang_raw) == 0:
+            print(f"{lang.upper()}: validation 데이터 없음, 스킵")
+            continue
+
+        print("\n" + "=" * 50)
+        print(f"[{lang.upper()}] 언어별 평가 ({len(lang_raw)}개)")
+        print("=" * 50)
+
+        lai, accuracy, err = evaluate(
+            lang_raw,
+            lang_gold,
+            lang_pred,
+            ignCaps=ignCaps,
+            verbose=verbose,
+            info=info,
+        )
+
+        results_by_lang[lang] = {
+            "lai": lai,
+            "accuracy": accuracy,
+            "err": err,
+            "n": len(lang_raw),
+        }
+
+        total_raw.extend(lang_raw)
+        total_gold.extend(lang_gold)
+        total_pred.extend(lang_pred)
+
+    print("\n" + "=" * 50)
+    print(f"[TOTAL] 전체 통합 평가 ({len(total_raw)}개)")
+    print("=" * 50)
+
+    total_lai, total_accuracy, total_err = evaluate(
+        total_raw,
+        total_gold,
+        total_pred,
+        ignCaps=ignCaps,
+        verbose=verbose,
+        info=info,
+    )
+
+    total_result = {
+        "lai": total_lai,
+        "accuracy": total_accuracy,
+        "err": total_err,
+        "n": len(total_raw),
+    }
+
+    print("=" * 50)
+
+    return {
+        "by_lang": results_by_lang,
+        "total": total_result,
     }
