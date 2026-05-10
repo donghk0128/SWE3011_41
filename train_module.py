@@ -236,6 +236,8 @@ def train_model(
         device=device,
     )
 
+    last_completed_epoch = start_epoch - 1
+
     try:
         for epoch in range(start_epoch, epochs):
             model.train()
@@ -276,10 +278,15 @@ def train_model(
                 print(f"[Epoch {epoch}] val loss:   {val_loss:.4f}")
 
             save_checkpoint(model, optimizer, epoch, ckpt_path)
+            last_completed_epoch = epoch
 
     except KeyboardInterrupt:
-        print("⛔ 중단 감지 → checkpoint 저장")
-        save_checkpoint(model, optimizer, epoch, ckpt_path)
+        print("⛔ 중단 감지")
+
+        if last_completed_epoch >= start_epoch:
+            print(f"마지막으로 완료된 epoch {last_completed_epoch} 기준 checkpoint 유지")
+        else:
+            print("현재 epoch가 완료되지 않았으므로 새 checkpoint를 저장하지 않음")
 
     except torch.cuda.OutOfMemoryError:
         print("💥 CUDA OOM 발생")
